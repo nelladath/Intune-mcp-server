@@ -98,7 +98,17 @@ class GraphClient:
                 error_message = response.text
             raise Exception(f"Graph API error ({response.status_code}): {error_message}")
         
-        return response.json()
+        # Handle empty response body
+        if not response.text or response.text.strip() == "":
+            return {"status": "success", "message": "Operation completed successfully"}
+        
+        try:
+            return response.json()
+        except Exception:
+            # If JSON parsing fails, return success if status is 2xx
+            if 200 <= response.status_code < 300:
+                return {"status": "success", "message": "Operation completed successfully", "raw_response": response.text}
+            raise
     
     async def get(self, endpoint: str, use_beta: bool = False, **kwargs) -> dict[str, Any]:
         """Make a GET request."""

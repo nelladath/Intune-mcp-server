@@ -372,6 +372,87 @@ async def remove_directory_role_member(role_id: str, user_id: str) -> dict[str, 
     }
 
 
+async def assign_directory_role(role_name: str, principal_id: str, principal_type: str = "user") -> dict[str, Any]:
+    """
+    Assign a directory role to a user or group.
+    
+    Args:
+        role_name: The display name of the directory role (e.g., "AI Administrator", "Global Administrator")
+        principal_id: The ID of the user or group to assign the role to
+        principal_type: Type of principal - "user" or "group" (default: "user")
+    
+    Returns:
+        Status of the operation
+    """
+    client = get_graph_client()
+    
+    # Validate principal type
+    if principal_type not in ["user", "group"]:
+        return {
+            "status": "error",
+            "message": f"Invalid principal_type '{principal_type}'. Must be 'user' or 'group'"
+        }
+    
+    # Get the role by name
+    roles_response = await client.get(f"/directoryRoles?$filter=displayName eq '{role_name}'")
+    roles = roles_response.get("value", [])
+    
+    if not roles:
+        # Role not activated, need to activate it first from template
+        templates_response = await client.get(f"/directoryRoleTemplates?$filter=displayName eq '{role_name}'")
+        templates = templates_response.get("value", [])
+        
+        if not templates:
+            return {
+                "status": "error",
+                "message": f"Directory role '{role_name}' not found"
+            }
+        
+        # Activate the role
+        template_id = templates[0].get("id")
+        await client.post("/directoryRoles", json={"roleTemplateId": template_id})
+        
+        # Get the activated role
+        roles_response = await client.get(f"/directoryRoles?$filter=displayName eq '{role_name}'")
+        roles = roles_response.get("value", [])
+    
+    role = roles[0]
+    role_id = role.get("id")
+    
+    # Get the principal (user or group)
+    if principal_type == "user":
+        principal = await client.get(f"/users/{principal_id}?$select=displayName,userPrincipalName")
+        principal_name = principal.get("displayName") or principal.get("userPrincipalName")
+    else:  # group
+        principal = await client.get(f"/groups/{principal_id}?$select=displayName")
+        principal_name = principal.get("displayName")
+    
+    # Add the principal to the role
+    try:
+        await client.post(
+            f"/directoryRoles/{role_id}/members/$ref",
+            json={"@odata.id": f"https://graph.microsoft.com/v1.0/directoryObjects/{principal_id}"}
+        )
+        
+        return {
+            "status": "success",
+            "message": f"{principal_type.capitalize()} '{principal_name}' assigned to role '{role_name}'",
+            "role_id": role_id,
+            "principal_id": principal_id,
+            "principal_type": principal_type
+        }
+    except Exception as e:
+        error_msg = str(e)
+        if "already exists" in error_msg.lower() or "one or more added object references already exist" in error_msg.lower():
+            return {
+                "status": "already_assigned",
+                "message": f"{principal_type.capitalize()} '{principal_name}' is already assigned to role '{role_name}'",
+                "role_id": role_id,
+                "principal_id": principal_id
+            }
+        raise
+
+
 # ============== SUBSCRIPTIONS ==============
 
 async def get_subscriptions() -> dict[str, Any]:

@@ -14,6 +14,7 @@ A comprehensive Model Context Protocol (MCP) server for managing Microsoft Intun
 
 ### **Entra ID (Azure AD) User Management**
 - Full user CRUD operations
+- **Comprehensive user offboarding** (NEW!)
 - Password management and reset
 - License assignment and management
 - User enable/disable
@@ -200,6 +201,7 @@ Add to your Cursor MCP configuration (`~/.cursor/mcp.json` on Windows: `%USERPRO
 | `revoke_user_sessions` | Force re-authentication |
 | `get_user_licenses` | Get license assignments |
 | `assign_license` / `remove_license` | Manage licenses |
+| **`offboard_user`** | **Complete user offboarding (NEW!)** |
 
 ### Group Management
 | Tool | Description |
@@ -262,12 +264,33 @@ Once configured, you can ask Claude to:
 - "List all Windows devices in my tenant"
 - "Show me non-compliant devices"
 - "Create a new user john.doe@company.com"
+- **"Offboard user john.doe@company.com"** ⭐ NEW!
 - "Reset password for user X"
 - "List all Conditional Access policies"
 - "Show MFA status for user X"
 - "Get Cloud PC overview"
 - "Show me license usage"
 - "List Global Administrators"
+
+### 🆕 User Offboarding
+
+The new `offboard_user` tool provides comprehensive automated offboarding:
+
+```
+offboard user john.doe@company.com
+```
+
+This will:
+1. ✓ Block user sign-in
+2. ✓ Revoke all active sessions
+3. ✓ Remove from all groups
+4. ✓ Remove all app assignments
+5. ✓ Remove all licenses
+6. ✓ Generate detailed access checklist
+
+**Note**: The user account is NOT deleted - it remains disabled for audit purposes.
+
+See [OFFBOARDING_GUIDE.md](OFFBOARDING_GUIDE.md) for detailed documentation.
 
 ## 🆘 Troubleshooting
 

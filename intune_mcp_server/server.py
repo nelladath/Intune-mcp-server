@@ -343,6 +343,59 @@ async def search_apps(search_term: str) -> dict[str, Any]:
     return {"search_term": search_term, "count": len(apps), "apps": [{"id": app.get("id"), "displayName": app.get("displayName"), "publisher": app.get("publisher")} for app in apps]}
 
 
+@mcp.tool()
+async def assign_app_to_group(app_id: str, group_id: str, intent: str = "required") -> dict[str, Any]:
+    """
+    Assign an app to a group.
+    
+    Args:
+        app_id: The Intune app ID
+        group_id: The group ID to assign to
+        intent: Assignment intent - "required", "available", "uninstall"
+    """
+    client = get_graph_client()
+    app = await client.get(f"/deviceAppManagement/mobileApps/{app_id}?$select=displayName")
+    group = await client.get(f"/groups/{group_id}?$select=displayName")
+    current_assignments = await client.get(f"/deviceAppManagement/mobileApps/{app_id}/assignments")
+    existing_assignments = current_assignments.get("value", [])
+    new_assignment = {
+        "@odata.type": "#microsoft.graph.mobileAppAssignment",
+        "intent": intent,
+        "target": {
+            "@odata.type": "#microsoft.graph.groupAssignmentTarget",
+            "groupId": group_id
+        },
+        "settings": {
+            "@odata.type": "#microsoft.graph.win32LobAppAssignmentSettings",
+            "notifications": "showAll",
+            "restartSettings": None,
+            "installTimeSettings": None
+        }
+    }
+    all_assignments = existing_assignments + [new_assignment]
+    await client.post(f"/deviceAppManagement/mobileApps/{app_id}/assign", json={"mobileAppAssignments": all_assignments})
+    return {"status": "success", "message": f"App '{app.get('displayName')}' assigned to group '{group.get('displayName')}' with intent '{intent}'", "app_id": app_id, "group_id": group_id, "intent": intent}
+
+
+@mcp.tool()
+async def remove_all_app_assignments(app_id: str, confirm: bool = False) -> dict[str, Any]:
+    """
+    Remove ALL assignments from an app. Requires confirm=True.
+    
+    Args:
+        app_id: The Intune app ID
+        confirm: Must be True to execute
+    """
+    if not confirm:
+        return {"status": "confirmation_required", "message": "⚠️ This will remove ALL assignments from this app! Set confirm=True to proceed."}
+    client = get_graph_client()
+    app = await client.get(f"/deviceAppManagement/mobileApps/{app_id}?$select=displayName")
+    current_assignments = await client.get(f"/deviceAppManagement/mobileApps/{app_id}/assignments")
+    assignment_count = len(current_assignments.get("value", []))
+    await client.post(f"/deviceAppManagement/mobileApps/{app_id}/assign", json={"mobileAppAssignments": []})
+    return {"status": "success", "message": f"Removed all {assignment_count} assignment(s) from app '{app.get('displayName')}'", "app_id": app_id, "removed_count": assignment_count}
+
+
 # ============== POLICY MANAGEMENT TOOLS ==============
 
 @mcp.tool()
@@ -476,6 +529,158 @@ async def get_deleted_users(top: int = 50) -> dict[str, Any]:
 async def restore_deleted_user(user_id: str) -> dict[str, Any]:
     """Restore a deleted user."""
     return await entra_users.restore_deleted_user(user_id)
+
+@mcp.tool()
+async def offboard_user(user_id: str) -> dict[str, Any]:
+    """
+    Comprehensive user offboarding for Entra ID (does NOT delete the user).
+    
+    This function performs complete offboarding:
+    1. Blocks user sign-in
+    2. Revokes all active sessions
+    3. Removes from all groups
+    4. Removes all app assignments
+    5. Removes all licenses
+    6. Generates detailed access checklist (directory roles, groups, apps, owned registrations)
+    
+    Args:
+        user_id: The user ID or userPrincipalName to offboard
+    
+    Returns:
+        Comprehensive offboarding report with actions taken and remaining access
+    """
+    return await entra_users.offboard_user(user_id)
+
+@mcp.tool()
+async def assign_manager(user_id: str, manager_id: str) -> dict[str, Any]:
+    """
+    Assign a manager to a user.
+    
+    Args:
+        user_id: The user ID or userPrincipalName
+        manager_id: The manager's user ID or userPrincipalName
+    
+    Returns:
+        Status of the operation
+    """
+    return await entra_users.assign_manager(user_id, manager_id)
+
+@mcp.tool()
+async def remove_manager(user_id: str) -> dict[str, Any]:
+    """
+    Remove the manager assignment from a user.
+    
+    Args:
+        user_id: The user ID or userPrincipalName
+    
+    Returns:
+        Status of the operation
+    """
+    return await entra_users.remove_manager(user_id)
+
+@mcp.tool()
+async def get_direct_reports(user_id: str) -> dict[str, Any]:
+    """
+    Get all direct reports for a user.
+    
+    Args:
+        user_id: The user ID or userPrincipalName
+    
+    Returns:
+        List of direct reports
+    """
+    return await entra_users.get_direct_reports(user_id)
+
+@mcp.tool()
+async def onboard_user(
+    display_name: str,
+    user_principal_name: str,
+    password: str,
+    given_name: str = "",
+    surname: str = "",
+    job_title: str = "",
+    department: str = "",
+    office_location: str = "",
+    mobile_phone: str = "",
+    manager_id: str = None,
+    license_skus: list[str] = None,
+    group_ids: list[str] = None,
+    send_welcome_email: bool = False
+) -> dict[str, Any]:
+    """
+    Complete user onboarding workflow.
+    
+    Automates the entire onboarding process:
+    1. Create user account
+    2. Assign manager (if provided)
+    3. Assign licenses (if provided)
+    4. Add to groups (if provided)
+    5. Optionally send welcome email
+    
+    Args:
+        display_name: User's display name
+        user_principal_name: User's UPN (e.g., user@domain.com)
+        password: Initial password
+        given_name: First name
+        surname: Last name
+        job_title: Job title
+        department: Department name
+        office_location: Office location
+        mobile_phone: Mobile phone number
+        manager_id: Manager's user ID (optional)
+        license_skus: List of license SKU IDs to assign (optional)
+        group_ids: List of group IDs to add user to (optional)
+        send_welcome_email: Send welcome email with credentials (optional)
+    
+    Returns:
+        Complete onboarding report
+    """
+    return await entra_users.onboard_user(
+        display_name, user_principal_name, password, given_name, surname,
+        job_title, department, office_location, mobile_phone, manager_id,
+        license_skus, group_ids, send_welcome_email
+    )
+
+@mcp.tool()
+async def bulk_create_users(users_data: list[dict[str, Any]]) -> dict[str, Any]:
+    """
+    Create multiple users in bulk.
+    
+    Args:
+        users_data: List of user dictionaries with keys like display_name, user_principal_name, password, etc.
+    
+    Returns:
+        Bulk creation report
+    """
+    return await entra_users.bulk_create_users(users_data)
+
+@mcp.tool()
+async def bulk_assign_licenses(user_ids: list[str], sku_id: str) -> dict[str, Any]:
+    """
+    Assign a license to multiple users in bulk.
+    
+    Args:
+        user_ids: List of user IDs or UPNs
+        sku_id: License SKU ID to assign
+    
+    Returns:
+        Bulk assignment report
+    """
+    return await entra_users.bulk_assign_licenses(user_ids, sku_id)
+
+@mcp.tool()
+async def bulk_add_to_group(user_ids: list[str], group_id: str) -> dict[str, Any]:
+    """
+    Add multiple users to a group in bulk.
+    
+    Args:
+        user_ids: List of user IDs or UPNs
+        group_id: Group ID
+    
+    Returns:
+        Bulk addition report
+    """
+    return await entra_users.bulk_add_to_group(user_ids, group_id)
 
 
 # ============== ENTRA ID GROUP TOOLS ==============
@@ -731,6 +936,21 @@ async def get_security_defaults_status() -> dict[str, Any]:
     """Get the status of security defaults for the tenant."""
     return await tenant_admin.get_security_defaults_status()
 
+@mcp.tool()
+async def assign_directory_role(role_name: str, principal_id: str, principal_type: str = "user") -> dict[str, Any]:
+    """
+    Assign a directory role to a user or group.
+    
+    Args:
+        role_name: The display name of the directory role (e.g., "AI Administrator", "Global Administrator")
+        principal_id: The ID of the user or group to assign the role to
+        principal_type: Type of principal - "user" or "group" (default: "user")
+    
+    Returns:
+        Status of the operation
+    """
+    return await tenant_admin.assign_directory_role(role_name, principal_id, principal_type)
+
 
 # ============== APP REGISTRATION & ENTERPRISE APP TOOLS ==============
 
@@ -925,6 +1145,245 @@ async def disable_entra_device(device_id: str) -> dict[str, Any]:
 async def enable_entra_device(device_id: str) -> dict[str, Any]:
     """Enable a device in Entra ID."""
     return await entra_devices.enable_entra_device(device_id)
+
+
+# ============== DEVICE INVENTORY & ADVANCED MANAGEMENT ==============
+
+@mcp.tool()
+async def get_device_hardware_inventory(device_id: str) -> dict[str, Any]:
+    """
+    Get detailed hardware inventory for a specific device.
+    
+    Args:
+        device_id: The Intune device ID
+    
+    Returns:
+        Comprehensive hardware details
+    """
+    client = get_graph_client()
+    
+    device = await client.get(f"/deviceManagement/managedDevices/{device_id}")
+    
+    return {
+        "device_name": device.get("deviceName"),
+        "hardware": {
+            "manufacturer": device.get("manufacturer"),
+            "model": device.get("model"),
+            "serialNumber": device.get("serialNumber"),
+            "imei": device.get("imei"),
+            "meid": device.get("meid"),
+            "wifiMacAddress": device.get("wifiMacAddress"),
+            "ethernetMacAddress": device.get("ethernetMacAddress"),
+            "phoneNumber": device.get("phoneNumber"),
+            "subscriberCarrier": device.get("subscriberCarrier"),
+        },
+        "storage": {
+            "totalStorageSpaceInBytes": device.get("totalStorageSpaceInBytes"),
+            "freeStorageSpaceInBytes": device.get("freeStorageSpaceInBytes"),
+            "usedStorageGB": round((device.get("totalStorageSpaceInBytes", 0) - device.get("freeStorageSpaceInBytes", 0)) / (1024**3), 2) if device.get("totalStorageSpaceInBytes") else None,
+            "totalStorageGB": round(device.get("totalStorageSpaceInBytes", 0) / (1024**3), 2) if device.get("totalStorageSpaceInBytes") else None,
+        },
+        "memory": {
+            "physicalMemoryInBytes": device.get("physicalMemoryInBytes"),
+            "physicalMemoryGB": round(device.get("physicalMemoryInBytes", 0) / (1024**3), 2) if device.get("physicalMemoryInBytes") else None,
+        },
+        "operating_system": {
+            "operatingSystem": device.get("operatingSystem"),
+            "osVersion": device.get("osVersion"),
+            "osBuildNumber": device.get("osBuildNumber"),
+            "isEncrypted": device.get("isEncrypted"),
+            "isSupervised": device.get("isSupervised"),
+        },
+        "security": {
+            "jailBroken": device.get("jailBroken"),
+            "activationLockBypassCode": "Present" if device.get("activationLockBypassCode") else "None",
+        },
+        "battery": {
+            "batteryHealthPercentage": device.get("batteryHealthPercentage"),
+            "batteryChargeCycles": device.get("batteryChargeCycles"),
+            "batteryLevelPercentage": device.get("batteryLevelPercentage"),
+        }
+    }
+
+
+@mcp.tool()
+async def get_device_installed_apps(device_id: str) -> dict[str, Any]:
+    """
+    Get all installed applications on a specific device.
+    
+    Args:
+        device_id: The Intune device ID
+    
+    Returns:
+        List of installed apps
+    """
+    client = get_graph_client()
+    
+    device = await client.get(f"/deviceManagement/managedDevices/{device_id}?$select=deviceName")
+    
+    try:
+        apps = await client.get(f"/deviceManagement/managedDevices/{device_id}/detectedApps")
+        app_list = apps.get("value", [])
+        
+        return {
+            "device_name": device.get("deviceName"),
+            "app_count": len(app_list),
+            "installed_apps": [
+                {
+                    "displayName": app.get("displayName"),
+                    "version": app.get("version"),
+                    "sizeInByte": app.get("sizeInByte"),
+                    "sizeInMB": round(app.get("sizeInByte", 0) / (1024**2), 2) if app.get("sizeInByte") else None,
+                }
+                for app in app_list
+            ]
+        }
+    except Exception as e:
+        return {
+            "device_name": device.get("deviceName"),
+            "status": "error",
+            "message": f"Failed to retrieve installed apps: {str(e)}"
+        }
+
+
+@mcp.tool()
+async def rename_device(device_id: str, new_name: str) -> dict[str, Any]:
+    """
+    Rename a managed device remotely.
+    
+    Args:
+        device_id: The Intune device ID
+        new_name: New device name
+    
+    Returns:
+        Status of the operation
+    """
+    client = get_graph_client()
+    
+    device = await client.get(f"/deviceManagement/managedDevices/{device_id}?$select=deviceName")
+    old_name = device.get("deviceName")
+    
+    await client.post(
+        f"/deviceManagement/managedDevices/{device_id}/setDeviceName",
+        json={"deviceName": new_name}
+    )
+    
+    return {
+        "status": "success",
+        "message": f"Device rename command sent. Old name: '{old_name}', New name: '{new_name}'",
+        "note": "Device will be renamed after next check-in"
+    }
+
+
+@mcp.tool()
+async def bulk_sync_devices(device_ids: list[str]) -> dict[str, Any]:
+    """
+    Trigger sync for multiple devices in bulk.
+    
+    Args:
+        device_ids: List of Intune device IDs
+    
+    Returns:
+        Bulk sync report
+    """
+    client = get_graph_client()
+    
+    results = {
+        "total": len(device_ids),
+        "successful": [],
+        "failed": []
+    }
+    
+    for device_id in device_ids:
+        try:
+            await client.post(f"/deviceManagement/managedDevices/{device_id}/syncDevice")
+            results["successful"].append(device_id)
+        except Exception as e:
+            results["failed"].append({"device_id": device_id, "error": str(e)})
+    
+    return {
+        "status": "completed",
+        "summary": {
+            "total": results["total"],
+            "successful": len(results["successful"]),
+            "failed": len(results["failed"])
+        },
+        "results": results
+    }
+
+
+@mcp.tool()
+async def get_device_network_info(device_id: str) -> dict[str, Any]:
+    """
+    Get network information for a specific device.
+    
+    Args:
+        device_id: The Intune device ID
+    
+    Returns:
+        Network details
+    """
+    client = get_graph_client()
+    
+    device = await client.get(f"/deviceManagement/managedDevices/{device_id}")
+    
+    return {
+        "device_name": device.get("deviceName"),
+        "network_info": {
+            "wifiMacAddress": device.get("wifiMacAddress"),
+            "ethernetMacAddress": device.get("ethernetMacAddress"),
+            "subscriberCarrier": device.get("subscriberCarrier"),
+            "phoneNumber": device.get("phoneNumber"),
+            "imei": device.get("imei"),
+            "meid": device.get("meid"),
+            "cellularTechnology": device.get("cellularTechnology"),
+            "isRoaming": device.get("isRoaming"),
+        },
+        "connectivity": {
+            "lastSyncDateTime": device.get("lastSyncDateTime"),
+            "managementAgent": device.get("managementAgent"),
+            "enrolledDateTime": device.get("enrolledDateTime"),
+        }
+    }
+
+
+@mcp.tool()
+async def get_stale_devices_report(days_inactive: int = 30, top: int = 100) -> dict[str, Any]:
+    """
+    Get devices that haven't synced in specified number of days.
+    
+    Args:
+        days_inactive: Number of days of inactivity (default 30)
+        top: Maximum number of devices to return
+    
+    Returns:
+        List of stale devices
+    """
+    client = get_graph_client()
+    from datetime import datetime, timedelta
+    
+    cutoff_date = (datetime.utcnow() - timedelta(days=days_inactive)).isoformat() + "Z"
+    
+    devices = await client.get(
+        f"/deviceManagement/managedDevices?$filter=lastSyncDateTime lt {cutoff_date}&$select=deviceName,userPrincipalName,lastSyncDateTime,operatingSystem,complianceState&$top={top}"
+    )
+    device_list = devices.get("value", [])
+    
+    return {
+        "days_inactive": days_inactive,
+        "count": len(device_list),
+        "stale_devices": [
+            {
+                "deviceName": d.get("deviceName"),
+                "userPrincipalName": d.get("userPrincipalName"),
+                "lastSyncDateTime": d.get("lastSyncDateTime"),
+                "operatingSystem": d.get("operatingSystem"),
+                "complianceState": d.get("complianceState"),
+            }
+            for d in device_list
+        ],
+        "recommendation": f"Consider retiring or removing devices inactive for {days_inactive}+ days"
+    }
 
 
 # Entry point

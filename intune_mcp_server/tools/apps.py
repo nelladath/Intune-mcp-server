@@ -409,4 +409,164 @@ def register_app_tools(server: Server):
                 for app in detected_apps[:50]  # Limit to first 50
             ]
         }
+    
+    @server.tool()
+    async def assign_app_to_group(
+        app_id: str,
+        group_id: str,
+        intent: str = "required"
+    ) -> dict[str, Any]:
+        """
+        Assign an app to a group.
+        
+        Args:
+            app_id: The Intune app ID
+            group_id: The group ID to assign to
+            intent: Assignment intent - "required", "available", "uninstall"
+        
+        Returns:
+            Assignment status
+        """
+        client = get_graph_client()
+        
+        # Get app and group details
+        app = await client.get(f"/deviceAppManagement/mobileApps/{app_id}?$select=displayName")
+        group = await client.get(f"/groups/{group_id}?$select=displayName")
+        
+        # Get current assignments
+        current_assignments = await client.get(f"/deviceAppManagement/mobileApps/{app_id}/assignments")
+        existing_assignments = current_assignments.get("value", [])
+        
+        # Create new assignment
+        new_assignment = {
+            "@odata.type": "#microsoft.graph.mobileAppAssignment",
+            "intent": intent,
+            "target": {
+                "@odata.type": "#microsoft.graph.groupAssignmentTarget",
+                "groupId": group_id
+            },
+            "settings": {
+                "@odata.type": "#microsoft.graph.win32LobAppAssignmentSettings",
+                "notifications": "showAll",
+                "restartSettings": None,
+                "installTimeSettings": None
+            }
+        }
+        
+        # Add to existing assignments
+        all_assignments = existing_assignments + [new_assignment]
+        
+        # Update assignments
+        await client.post(
+            f"/deviceAppManagement/mobileApps/{app_id}/assign",
+            json={"mobileAppAssignments": all_assignments}
+        )
+        
+        return {
+            "status": "success",
+            "message": f"App '{app.get('displayName')}' assigned to group '{group.get('displayName')}' with intent '{intent}'",
+            "app_id": app_id,
+            "group_id": group_id,
+            "intent": intent
+        }
+    
+    @server.tool()
+    async def remove_app_assignment(
+        app_id: str,
+        assignment_id: str = None,
+        group_id: str = None
+    ) -> dict[str, Any]:
+        """
+        Remove an app assignment by assignment ID or group ID.
+        
+        Args:
+            app_id: The Intune app ID
+            assignment_id: The assignment ID to remove (optional)
+            group_id: The group ID to remove assignment for (optional)
+        
+        Returns:
+            Removal status
+        """
+        client = get_graph_client()
+        
+        app = await client.get(f"/deviceAppManagement/mobileApps/{app_id}?$select=displayName")
+        
+        # Get current assignments
+        current_assignments = await client.get(f"/deviceAppManagement/mobileApps/{app_id}/assignments")
+        existing_assignments = current_assignments.get("value", [])
+        
+        # Filter out the assignment to remove
+        filtered_assignments = []
+        removed_count = 0
+        
+        for assignment in existing_assignments:
+            should_remove = False
+            
+            if assignment_id and assignment.get("id") == assignment_id:
+                should_remove = True
+            elif group_id and assignment.get("target", {}).get("groupId") == group_id:
+                should_remove = True
+            
+            if not should_remove:
+                filtered_assignments.append(assignment)
+            else:
+                removed_count += 1
+        
+        if removed_count == 0:
+            return {
+                "status": "not_found",
+                "message": "No matching assignment found to remove"
+            }
+        
+        # Update with filtered assignments
+        await client.post(
+            f"/deviceAppManagement/mobileApps/{app_id}/assign",
+            json={"mobileAppAssignments": filtered_assignments}
+        )
+        
+        return {
+            "status": "success",
+            "message": f"Removed {removed_count} assignment(s) from app '{app.get('displayName')}'",
+            "app_id": app_id,
+            "removed_count": removed_count
+        }
+    
+    @server.tool()
+    async def remove_all_app_assignments(app_id: str, confirm: bool = False) -> dict[str, Any]:
+        """
+        Remove ALL assignments from an app.
+        
+        Args:
+            app_id: The Intune app ID
+            confirm: Must be True to execute
+        
+        Returns:
+            Removal status
+        """
+        if not confirm:
+            return {
+                "status": "confirmation_required",
+                "message": "⚠️ This will remove ALL assignments from this app! Set confirm=True to proceed."
+            }
+        
+        client = get_graph_client()
+        
+        app = await client.get(f"/deviceAppManagement/mobileApps/{app_id}?$select=displayName")
+        
+        # Get current assignments count
+        current_assignments = await client.get(f"/deviceAppManagement/mobileApps/{app_id}/assignments")
+        assignment_count = len(current_assignments.get("value", []))
+        
+        # Remove all assignments
+        await client.post(
+            f"/deviceAppManagement/mobileApps/{app_id}/assign",
+            json={"mobileAppAssignments": []}
+        )
+        
+        return {
+            "status": "success",
+            "message": f"Removed all {assignment_count} assignment(s) from app '{app.get('displayName')}'",
+            "app_id": app_id,
+            "removed_count": assignment_count
+        }
 
