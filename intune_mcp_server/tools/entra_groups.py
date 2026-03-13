@@ -3,6 +3,7 @@ Entra ID (Azure AD) Group Management Tools
 Comprehensive group management including CRUD, membership, and dynamic groups.
 """
 
+import asyncio
 from typing import Any
 from ..graph_client import get_graph_client
 
@@ -83,25 +84,19 @@ async def get_group_details(group_id: str) -> dict[str, Any]:
     """
     client = get_graph_client()
     
-    group = await client.get(f"/groups/{group_id}")
+    group, members_result, owners_result = await asyncio.gather(
+        client.get(f"/groups/{group_id}"),
+        client.get(f"/groups/{group_id}/members?$top=999"),
+        client.get(f"/groups/{group_id}/owners"),
+        return_exceptions=True,
+    )
     
-    # Get member count
-    try:
-        members = await client.get(f"/groups/{group_id}/members/$count", headers={"ConsistencyLevel": "eventual"})
-        member_count = members if isinstance(members, int) else len((await client.get(f"/groups/{group_id}/members?$top=1")).get("value", []))
-    except:
-        try:
-            members_resp = await client.get(f"/groups/{group_id}/members?$top=999")
-            member_count = len(members_resp.get("value", []))
-        except:
-            member_count = "Unknown"
+    if isinstance(members_result, Exception):
+        member_count = "Unknown"
+    else:
+        member_count = len(members_result.get("value", []))
     
-    # Get owners
-    try:
-        owners = await client.get(f"/groups/{group_id}/owners")
-        owner_list = owners.get("value", [])
-    except:
-        owner_list = []
+    owner_list = [] if isinstance(owners_result, Exception) else owners_result.get("value", [])
     
     return {
         "basic_info": {
@@ -409,8 +404,10 @@ async def add_group_member(group_id: str, member_id: str) -> dict[str, Any]:
     """
     client = get_graph_client()
     
-    group = await client.get(f"/groups/{group_id}?$select=displayName")
-    member = await client.get(f"/directoryObjects/{member_id}?$select=displayName")
+    group, member = await asyncio.gather(
+        client.get(f"/groups/{group_id}?$select=displayName"),
+        client.get(f"/directoryObjects/{member_id}?$select=displayName"),
+    )
     
     await client.post(
         f"/groups/{group_id}/members/$ref",
@@ -535,8 +532,10 @@ async def add_group_owner(group_id: str, owner_id: str) -> dict[str, Any]:
     """
     client = get_graph_client()
     
-    group = await client.get(f"/groups/{group_id}?$select=displayName")
-    owner = await client.get(f"/users/{owner_id}?$select=displayName")
+    group, owner = await asyncio.gather(
+        client.get(f"/groups/{group_id}?$select=displayName"),
+        client.get(f"/users/{owner_id}?$select=displayName"),
+    )
     
     await client.post(
         f"/groups/{group_id}/owners/$ref",

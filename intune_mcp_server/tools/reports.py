@@ -3,6 +3,7 @@ Intune and Entra ID Reports
 Comprehensive reporting for devices, compliance, apps, and policies.
 """
 
+import asyncio
 from typing import Any
 from ..graph_client import get_graph_client
 
@@ -69,12 +70,9 @@ async def get_device_configuration_status(profile_id: str) -> dict[str, Any]:
     """
     client = get_graph_client()
     
-    # Get profile info
-    profile = await client.get(f"/deviceManagement/deviceConfigurations/{profile_id}")
-    
-    # Get device statuses
-    statuses = await client.get(
-        f"/deviceManagement/deviceConfigurations/{profile_id}/deviceStatuses?$top=999"
+    profile, statuses = await asyncio.gather(
+        client.get(f"/deviceManagement/deviceConfigurations/{profile_id}"),
+        client.get(f"/deviceManagement/deviceConfigurations/{profile_id}/deviceStatuses?$top=999"),
     )
     status_list = statuses.get("value", [])
     
@@ -373,20 +371,16 @@ async def get_policy_assignments_report() -> dict[str, Any]:
     """
     client = get_graph_client()
     
-    # Get compliance policies
-    compliance = await client.get("/deviceManagement/deviceCompliancePolicies")
-    compliance_policies = compliance.get("value", [])
+    compliance, configs, app_protection_result = await asyncio.gather(
+        client.get("/deviceManagement/deviceCompliancePolicies"),
+        client.get("/deviceManagement/deviceConfigurations"),
+        client.get("/deviceAppManagement/managedAppPolicies"),
+        return_exceptions=True,
+    )
     
-    # Get configuration profiles
-    configs = await client.get("/deviceManagement/deviceConfigurations")
-    config_profiles = configs.get("value", [])
-    
-    # Get app protection policies
-    try:
-        app_protection = await client.get("/deviceAppManagement/managedAppPolicies")
-        app_policies = app_protection.get("value", [])
-    except:
-        app_policies = []
+    compliance_policies = compliance.get("value", []) if not isinstance(compliance, Exception) else []
+    config_profiles = configs.get("value", []) if not isinstance(configs, Exception) else []
+    app_policies = [] if isinstance(app_protection_result, Exception) else app_protection_result.get("value", [])
     
     return {
         "summary": {

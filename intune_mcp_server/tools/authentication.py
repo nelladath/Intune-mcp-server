@@ -3,6 +3,7 @@ Authentication and Identity Protection Tools
 MFA management, authentication methods, sign-in logs, and identity protection.
 """
 
+import asyncio
 from typing import Any
 from ..graph_client import get_graph_client
 
@@ -21,9 +22,10 @@ async def get_user_authentication_methods(user_id: str) -> dict[str, Any]:
     """
     client = get_graph_client()
     
-    user = await client.get(f"/users/{user_id}?$select=displayName,userPrincipalName")
-    
-    methods = await client.get(f"/users/{user_id}/authentication/methods")
+    user, methods = await asyncio.gather(
+        client.get(f"/users/{user_id}?$select=displayName,userPrincipalName"),
+        client.get(f"/users/{user_id}/authentication/methods"),
+    )
     method_list = methods.get("value", [])
     
     return {
@@ -93,9 +95,10 @@ async def get_user_mfa_status(user_id: str) -> dict[str, Any]:
     """
     client = get_graph_client()
     
-    user = await client.get(f"/users/{user_id}?$select=displayName,userPrincipalName")
-    
-    methods = await client.get(f"/users/{user_id}/authentication/methods")
+    user, methods = await asyncio.gather(
+        client.get(f"/users/{user_id}?$select=displayName,userPrincipalName"),
+        client.get(f"/users/{user_id}/authentication/methods"),
+    )
     method_list = methods.get("value", [])
     
     # Categorize methods
@@ -615,15 +618,14 @@ async def get_password_policies() -> dict[str, Any]:
     """
     client = get_graph_client()
     
-    # Get organization password policies
-    org = await client.get("/organization")
-    org_info = org.get("value", [{}])[0]
+    org_result, auth_policy_result = await asyncio.gather(
+        client.get("/organization"),
+        client.get("/policies/authenticationMethodsPolicy", use_beta=True),
+        return_exceptions=True,
+    )
     
-    # Get authentication methods policy
-    try:
-        auth_policy = await client.get("/policies/authenticationMethodsPolicy", use_beta=True)
-    except:
-        auth_policy = {}
+    org_info = org_result.get("value", [{}])[0] if not isinstance(org_result, Exception) else {}
+    auth_policy = {} if isinstance(auth_policy_result, Exception) else auth_policy_result
     
     return {
         "organization": {

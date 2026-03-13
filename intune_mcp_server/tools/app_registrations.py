@@ -3,6 +3,7 @@ App Registration & Enterprise Application (Service Principal) Tools
 Comprehensive management of Entra ID applications including credentials, permissions, and enterprise apps.
 """
 
+import asyncio
 from typing import Any
 from datetime import datetime, timezone
 from ..graph_client import get_graph_client
@@ -355,26 +356,16 @@ async def get_enterprise_app_details(sp_id: str) -> dict[str, Any]:
     
     sp_object_id = sp.get("id")
     
-    # Get app role assignments (who/what is assigned to this app)
-    try:
-        assignments_response = await client.get(f"/servicePrincipals/{sp_object_id}/appRoleAssignedTo")
-        app_role_assignments = assignments_response.get("value", [])
-    except:
-        app_role_assignments = []
+    assignments_result, oauth_result, owners_result = await asyncio.gather(
+        client.get(f"/servicePrincipals/{sp_object_id}/appRoleAssignedTo"),
+        client.get(f"/servicePrincipals/{sp_object_id}/oauth2PermissionGrants"),
+        client.get(f"/servicePrincipals/{sp_object_id}/owners"),
+        return_exceptions=True,
+    )
     
-    # Get OAuth2 permission grants (delegated permissions granted)
-    try:
-        oauth_grants_response = await client.get(f"/servicePrincipals/{sp_object_id}/oauth2PermissionGrants")
-        oauth_grants = oauth_grants_response.get("value", [])
-    except:
-        oauth_grants = []
-    
-    # Get owners
-    try:
-        owners_response = await client.get(f"/servicePrincipals/{sp_object_id}/owners")
-        owners = owners_response.get("value", [])
-    except:
-        owners = []
+    app_role_assignments = [] if isinstance(assignments_result, Exception) else assignments_result.get("value", [])
+    oauth_grants = [] if isinstance(oauth_result, Exception) else oauth_result.get("value", [])
+    owners = [] if isinstance(owners_result, Exception) else owners_result.get("value", [])
     
     return {
         "id": sp.get("id"),

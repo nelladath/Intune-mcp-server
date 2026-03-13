@@ -3,6 +3,7 @@ Windows 365 Cloud PC Management Tools
 Manage Cloud PCs, provisioning policies, and user settings.
 """
 
+import asyncio
 from typing import Any
 from ..graph_client import get_graph_client
 
@@ -342,20 +343,13 @@ async def get_provisioning_policy(policy_id: str) -> dict[str, Any]:
     """
     client = get_graph_client()
     
-    policy = await client.get(
-        f"/deviceManagement/virtualEndpoint/provisioningPolicies/{policy_id}",
-        use_beta=True
+    policy, assignments_result = await asyncio.gather(
+        client.get(f"/deviceManagement/virtualEndpoint/provisioningPolicies/{policy_id}", use_beta=True),
+        client.get(f"/deviceManagement/virtualEndpoint/provisioningPolicies/{policy_id}/assignments", use_beta=True),
+        return_exceptions=True,
     )
     
-    # Get assignments
-    try:
-        assignments = await client.get(
-            f"/deviceManagement/virtualEndpoint/provisioningPolicies/{policy_id}/assignments",
-            use_beta=True
-        )
-        assignment_list = assignments.get("value", [])
-    except:
-        assignment_list = []
+    assignment_list = [] if isinstance(assignments_result, Exception) else assignments_result.get("value", [])
     
     return {
         "policy": policy,

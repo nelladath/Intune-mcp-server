@@ -1,6 +1,7 @@
 """Microsoft Graph API Client with authentication."""
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -8,6 +9,8 @@ import httpx
 from msal import ConfidentialClientApplication
 
 from .config import get_config, GraphConfig
+
+_msal_executor = ThreadPoolExecutor(max_workers=2)
 
 
 class GraphClient:
@@ -41,10 +44,9 @@ class GraphClient:
         # Acquire new token
         scopes = ["https://graph.microsoft.com/.default"]
         
-        # Run MSAL token acquisition in thread pool (it's synchronous)
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
-            None,
+            _msal_executor,
             lambda: self.msal_app.acquire_token_for_client(scopes=scopes)
         )
         
@@ -69,25 +71,34 @@ class GraphClient:
         method: str,
         endpoint: str,
         use_beta: bool = False,
+        _max_retries: int = 3,
         **kwargs
     ) -> dict[str, Any]:
-        """Make an authenticated request to Microsoft Graph."""
-        token = await self.get_token()
-        client = await self.get_http_client()
-        
+        """Make an authenticated request to Microsoft Graph with retry for transient failures."""
         base_url = self.config.beta_endpoint if use_beta else self.config.graph_endpoint
         url = f"{base_url}{endpoint}" if endpoint.startswith("/") else f"{base_url}/{endpoint}"
+        extra_headers = kwargs.pop("headers", {})
         
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            **kwargs.pop("headers", {})
-        }
+        for attempt in range(_max_retries + 1):
+            token = await self.get_token()
+            client = await self.get_http_client()
+            
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                **extra_headers,
+            }
+            
+            response = await client.request(method, url, headers=headers, **kwargs)
+            
+            if response.status_code in (429, 503) and attempt < _max_retries:
+                retry_after = int(response.headers.get("Retry-After", min(2 ** attempt, 16)))
+                await asyncio.sleep(retry_after)
+                continue
+            
+            break
         
-        response = await client.request(method, url, headers=headers, **kwargs)
-        
-        # Handle different response codes
-        if response.status_code == 204:  # No content
+        if response.status_code == 204:
             return {"status": "success", "message": "Operation completed successfully"}
         
         if response.status_code >= 400:
@@ -98,14 +109,12 @@ class GraphClient:
                 error_message = response.text
             raise Exception(f"Graph API error ({response.status_code}): {error_message}")
         
-        # Handle empty response body
         if not response.text or response.text.strip() == "":
             return {"status": "success", "message": "Operation completed successfully"}
         
         try:
             return response.json()
         except Exception:
-            # If JSON parsing fails, return success if status is 2xx
             if 200 <= response.status_code < 300:
                 return {"status": "success", "message": "Operation completed successfully", "raw_response": response.text}
             raise
@@ -139,9 +148,6 @@ class GraphClient:
         
         while current_endpoint and page_count < max_pages:
             if page_count > 0:
-                # For subsequent pages, the endpoint is a full URL
-                response = await self._request("GET", "", use_beta=use_beta)
-                # Actually we need to handle nextLink differently
                 token = await self.get_token()
                 client = await self.get_http_client()
                 headers = {"Authorization": f"Bearer {token}"}

@@ -3,6 +3,7 @@ Intune Scripts and Remediations Tools
 PowerShell scripts, proactive remediations, and custom actions.
 """
 
+import asyncio
 from typing import Any
 from ..graph_client import get_graph_client
 
@@ -55,25 +56,15 @@ async def get_device_management_script(script_id: str) -> dict[str, Any]:
     """
     client = get_graph_client()
     
-    script = await client.get(f"/deviceManagement/deviceManagementScripts/{script_id}")
+    script, assignments_result, states_result = await asyncio.gather(
+        client.get(f"/deviceManagement/deviceManagementScripts/{script_id}"),
+        client.get(f"/deviceManagement/deviceManagementScripts/{script_id}/assignments"),
+        client.get(f"/deviceManagement/deviceManagementScripts/{script_id}/deviceRunStates?$top=50"),
+        return_exceptions=True,
+    )
     
-    # Get assignments
-    try:
-        assignments = await client.get(
-            f"/deviceManagement/deviceManagementScripts/{script_id}/assignments"
-        )
-        assignment_list = assignments.get("value", [])
-    except:
-        assignment_list = []
-    
-    # Get device run states
-    try:
-        states = await client.get(
-            f"/deviceManagement/deviceManagementScripts/{script_id}/deviceRunStates?$top=50"
-        )
-        run_states = states.get("value", [])
-    except:
-        run_states = []
+    assignment_list = [] if isinstance(assignments_result, Exception) else assignments_result.get("value", [])
+    run_states = [] if isinstance(states_result, Exception) else states_result.get("value", [])
     
     # Decode script content if present
     script_content = script.get("scriptContent")
@@ -383,29 +374,15 @@ async def get_device_health_script_status(script_id: str) -> dict[str, Any]:
     """
     client = get_graph_client()
     
-    script = await client.get(
-        f"/deviceManagement/deviceHealthScripts/{script_id}?$select=displayName",
-        use_beta=True
+    script, summary_result, states_result = await asyncio.gather(
+        client.get(f"/deviceManagement/deviceHealthScripts/{script_id}?$select=displayName", use_beta=True),
+        client.get(f"/deviceManagement/deviceHealthScripts/{script_id}/runSummary", use_beta=True),
+        client.get(f"/deviceManagement/deviceHealthScripts/{script_id}/deviceRunStates?$top=50", use_beta=True),
+        return_exceptions=True,
     )
     
-    # Get run summary
-    try:
-        summary = await client.get(
-            f"/deviceManagement/deviceHealthScripts/{script_id}/runSummary",
-            use_beta=True
-        )
-    except:
-        summary = {}
-    
-    # Get device run states
-    try:
-        states = await client.get(
-            f"/deviceManagement/deviceHealthScripts/{script_id}/deviceRunStates?$top=50",
-            use_beta=True
-        )
-        run_states = states.get("value", [])
-    except:
-        run_states = []
+    summary = {} if isinstance(summary_result, Exception) else summary_result
+    run_states = [] if isinstance(states_result, Exception) else states_result.get("value", [])
     
     return {
         "script": {

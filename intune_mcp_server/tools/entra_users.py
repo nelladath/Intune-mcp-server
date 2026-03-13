@@ -3,6 +3,7 @@ Entra ID (Azure AD) User Management Tools
 Comprehensive user management including CRUD, passwords, licenses, and authentication.
 """
 
+import asyncio
 from typing import Any
 from ..graph_client import get_graph_client
 
@@ -53,21 +54,20 @@ async def get_user_details(user_id: str) -> dict[str, Any]:
     """
     client = get_graph_client()
     
-    user = await client.get(f"/users/{user_id}?$select=id,displayName,userPrincipalName,mail,givenName,surname,jobTitle,department,officeLocation,companyName,employeeId,employeeType,mobilePhone,businessPhones,streetAddress,city,state,postalCode,country,accountEnabled,createdDateTime,lastPasswordChangeDateTime,assignedLicenses,assignedPlans")
+    user, manager_result, reports_result = await asyncio.gather(
+        client.get(f"/users/{user_id}?$select=id,displayName,userPrincipalName,mail,givenName,surname,jobTitle,department,officeLocation,companyName,employeeId,employeeType,mobilePhone,businessPhones,streetAddress,city,state,postalCode,country,accountEnabled,createdDateTime,lastPasswordChangeDateTime,assignedLicenses,assignedPlans"),
+        client.get(f"/users/{user_id}/manager?$select=displayName,userPrincipalName"),
+        client.get(f"/users/{user_id}/directReports?$count=true&$top=1"),
+        return_exceptions=True,
+    )
     
-    # Get manager
-    try:
-        manager = await client.get(f"/users/{user_id}/manager?$select=displayName,userPrincipalName")
-        manager_info = {"displayName": manager.get("displayName"), "userPrincipalName": manager.get("userPrincipalName")}
-    except:
-        manager_info = None
+    manager_info = None
+    if not isinstance(manager_result, Exception):
+        manager_info = {"displayName": manager_result.get("displayName"), "userPrincipalName": manager_result.get("userPrincipalName")}
     
-    # Get direct reports count
-    try:
-        reports = await client.get(f"/users/{user_id}/directReports?$count=true&$top=1")
-        direct_reports_count = len(reports.get("value", []))
-    except:
-        direct_reports_count = 0
+    direct_reports_count = 0
+    if not isinstance(reports_result, Exception):
+        direct_reports_count = len(reports_result.get("value", []))
     
     return {
         "basic_info": {
@@ -452,8 +452,10 @@ async def assign_manager(user_id: str, manager_id: str) -> dict[str, Any]:
     """
     client = get_graph_client()
     
-    user = await client.get(f"/users/{user_id}?$select=displayName,id")
-    manager = await client.get(f"/users/{manager_id}?$select=displayName,id")
+    user, manager = await asyncio.gather(
+        client.get(f"/users/{user_id}?$select=displayName,id"),
+        client.get(f"/users/{manager_id}?$select=displayName,id"),
+    )
     
     await client.patch(
         f"/users/{user['id']}/manager/$ref",
@@ -751,14 +753,26 @@ async def offboard_user(user_id: str) -> dict[str, Any]:
         groups_response = await client.get(f"/users/{user_object_id}/memberOf")
         groups = groups_response.get("value", [])
         
-        for group in groups:
-            group_id = group.get("id")
-            group_name = group.get("displayName")
+        async def _remove_from_group(g):
+            gid, gname = g.get("id"), g.get("displayName")
             try:
-                await client.delete(f"/groups/{group_id}/members/{user_object_id}/$ref")
-                groups_removed.append(group_name)
+                await client.delete(f"/groups/{gid}/members/{user_object_id}/$ref")
+                return gname, None
             except Exception as e:
-                groups_failed.append({"name": group_name, "error": str(e)})
+                return gname, str(e)
+
+        sem = asyncio.Semaphore(10)
+        async def _limited(coro):
+            async with sem:
+                return await coro
+        results = await asyncio.gather(*[_limited(_remove_from_group(g)) for g in groups], return_exceptions=True)
+        for r in results:
+            if isinstance(r, Exception):
+                groups_failed.append({"name": "Unknown", "error": str(r)})
+            elif r[1] is None:
+                groups_removed.append(r[0])
+            else:
+                groups_failed.append({"name": r[0], "error": r[1]})
         
         offboarding_report["actions"]["group_removal"] = {
             "status": "success" if not groups_failed else "partial",
@@ -780,14 +794,26 @@ async def offboard_user(user_id: str) -> dict[str, Any]:
         app_assignments_response = await client.get(f"/users/{user_object_id}/appRoleAssignments")
         app_assignments = app_assignments_response.get("value", [])
         
-        for app in app_assignments:
-            app_assignment_id = app.get("id")
-            app_name = app.get("resourceDisplayName")
+        async def _remove_app(a):
+            aid, aname = a.get("id"), a.get("resourceDisplayName")
             try:
-                await client.delete(f"/users/{user_object_id}/appRoleAssignments/{app_assignment_id}")
-                apps_removed.append(app_name)
+                await client.delete(f"/users/{user_object_id}/appRoleAssignments/{aid}")
+                return aname, None
             except Exception as e:
-                apps_failed.append({"name": app_name, "error": str(e)})
+                return aname, str(e)
+
+        sem_app = asyncio.Semaphore(10)
+        async def _limited_app(coro):
+            async with sem_app:
+                return await coro
+        app_results = await asyncio.gather(*[_limited_app(_remove_app(a)) for a in app_assignments], return_exceptions=True)
+        for r in app_results:
+            if isinstance(r, Exception):
+                apps_failed.append({"name": "Unknown", "error": str(r)})
+            elif r[1] is None:
+                apps_removed.append(r[0])
+            else:
+                apps_failed.append({"name": r[0], "error": r[1]})
         
         offboarding_report["actions"]["app_removal"] = {
             "status": "success" if not apps_failed else "partial",
@@ -847,17 +873,18 @@ async def offboard_user(user_id: str) -> dict[str, Any]:
         )
         role_assignments = role_assignments_response.get("value", [])
         
+        role_def_results = await asyncio.gather(
+            *[client.get(f"/roleManagement/directory/roleDefinitions/{role.get('roleDefinitionId')}") for role in role_assignments],
+            return_exceptions=True,
+        )
         directory_roles = []
-        for role in role_assignments:
-            try:
-                role_def = await client.get(f"/roleManagement/directory/roleDefinitions/{role.get('roleDefinitionId')}")
+        for role, role_def in zip(role_assignments, role_def_results):
+            if not isinstance(role_def, Exception):
                 directory_roles.append({
                     "roleName": role_def.get("displayName"),
                     "roleId": role.get("roleDefinitionId"),
                     "assignmentId": role.get("id")
                 })
-            except:
-                pass
         
         offboarding_report["access_checklist"]["directory_roles"] = {
             "count": len(directory_roles),
@@ -963,11 +990,11 @@ async def assign_manager(user_id: str, manager_id: str) -> dict[str, Any]:
     """
     client = get_graph_client()
     
-    # Get user and manager details
-    user = await client.get(f"/users/{user_id}?$select=displayName,userPrincipalName")
-    manager = await client.get(f"/users/{manager_id}?$select=displayName,userPrincipalName")
+    user, manager = await asyncio.gather(
+        client.get(f"/users/{user_id}?$select=displayName,userPrincipalName"),
+        client.get(f"/users/{manager_id}?$select=displayName,userPrincipalName"),
+    )
     
-    # Assign manager
     await client.put(
         f"/users/{user_id}/manager/$ref",
         json={"@odata.id": f"https://graph.microsoft.com/v1.0/users/{manager_id}"}
@@ -1166,12 +1193,15 @@ async def onboard_user(
         licenses_assigned = []
         licenses_failed = []
         
-        for sku_id in license_skus:
-            try:
-                await assign_license(user_id, sku_id)
+        lic_results = await asyncio.gather(
+            *[assign_license(user_id, sku_id) for sku_id in license_skus],
+            return_exceptions=True,
+        )
+        for sku_id, r in zip(license_skus, lic_results):
+            if isinstance(r, Exception):
+                licenses_failed.append({"sku_id": sku_id, "error": str(r)})
+            else:
                 licenses_assigned.append(sku_id)
-            except Exception as e:
-                licenses_failed.append({"sku_id": sku_id, "error": str(e)})
         
         if licenses_assigned:
             onboarding_report["actions"]["licenses_assigned"] = {
@@ -1197,15 +1227,15 @@ async def onboard_user(
         groups_added = []
         groups_failed = []
         
-        for group_id in group_ids:
-            try:
-                await client.post(
-                    f"/groups/{group_id}/members/$ref",
-                    json={"@odata.id": f"https://graph.microsoft.com/v1.0/users/{user_id}"}
-                )
-                groups_added.append(group_id)
-            except Exception as e:
-                groups_failed.append({"group_id": group_id, "error": str(e)})
+        grp_results = await asyncio.gather(
+            *[client.post(f"/groups/{gid}/members/$ref", json={"@odata.id": f"https://graph.microsoft.com/v1.0/users/{user_id}"}) for gid in group_ids],
+            return_exceptions=True,
+        )
+        for gid, r in zip(group_ids, grp_results):
+            if isinstance(r, Exception):
+                groups_failed.append({"group_id": gid, "error": str(r)})
+            else:
+                groups_added.append(gid)
         
         if groups_added:
             onboarding_report["actions"]["groups_added"] = {
@@ -1308,10 +1338,11 @@ async def bulk_create_users(users_data: list[dict[str, Any]]) -> dict[str, Any]:
         "failed": []
     }
     
-    for user_data in users_data:
-        try:
+    sem = asyncio.Semaphore(10)
+    async def _create_one(user_data):
+        async with sem:
             mail_nickname = user_data.get("user_principal_name", "").split("@")[0]
-            user_result = await create_user(
+            return await create_user(
                 display_name=user_data.get("display_name"),
                 user_principal_name=user_data.get("user_principal_name"),
                 mail_nickname=mail_nickname,
@@ -1325,17 +1356,23 @@ async def bulk_create_users(users_data: list[dict[str, Any]]) -> dict[str, Any]:
                 office_location=user_data.get("office_location", ""),
                 mobile_phone=user_data.get("mobile_phone", "")
             )
-            
-            results["successful"].append({
-                "user_principal_name": user_data.get("user_principal_name"),
-                "user_id": user_result.get("user", {}).get("id"),
-                "display_name": user_data.get("display_name")
-            })
-        except Exception as e:
+
+    create_results = await asyncio.gather(
+        *[_create_one(ud) for ud in users_data],
+        return_exceptions=True,
+    )
+    for user_data, r in zip(users_data, create_results):
+        if isinstance(r, Exception):
             results["failed"].append({
                 "user_principal_name": user_data.get("user_principal_name"),
                 "display_name": user_data.get("display_name"),
-                "error": str(e)
+                "error": str(r)
+            })
+        else:
+            results["successful"].append({
+                "user_principal_name": user_data.get("user_principal_name"),
+                "user_id": r.get("user", {}).get("id"),
+                "display_name": user_data.get("display_name")
             })
     
     return {
@@ -1366,12 +1403,20 @@ async def bulk_assign_licenses(user_ids: list[str], sku_id: str) -> dict[str, An
         "failed": []
     }
     
-    for user_id in user_ids:
-        try:
-            await assign_license(user_id, sku_id)
-            results["successful"].append(user_id)
-        except Exception as e:
-            results["failed"].append({"user_id": user_id, "error": str(e)})
+    sem = asyncio.Semaphore(10)
+    async def _assign_one(uid):
+        async with sem:
+            return await assign_license(uid, sku_id)
+
+    lic_results = await asyncio.gather(
+        *[_assign_one(uid) for uid in user_ids],
+        return_exceptions=True,
+    )
+    for uid, r in zip(user_ids, lic_results):
+        if isinstance(r, Exception):
+            results["failed"].append({"user_id": uid, "error": str(r)})
+        else:
+            results["successful"].append(uid)
     
     return {
         "status": "completed",
@@ -1407,15 +1452,23 @@ async def bulk_add_to_group(user_ids: list[str], group_id: str) -> dict[str, Any
     # Get group details
     group = await client.get(f"/groups/{group_id}?$select=displayName")
     
-    for user_id in user_ids:
-        try:
-            await client.post(
+    sem = asyncio.Semaphore(10)
+    async def _add_one(uid):
+        async with sem:
+            return await client.post(
                 f"/groups/{group_id}/members/$ref",
-                json={"@odata.id": f"https://graph.microsoft.com/v1.0/users/{user_id}"}
+                json={"@odata.id": f"https://graph.microsoft.com/v1.0/users/{uid}"}
             )
-            results["successful"].append(user_id)
-        except Exception as e:
-            results["failed"].append({"user_id": user_id, "error": str(e)})
+
+    grp_results = await asyncio.gather(
+        *[_add_one(uid) for uid in user_ids],
+        return_exceptions=True,
+    )
+    for uid, r in zip(user_ids, grp_results):
+        if isinstance(r, Exception):
+            results["failed"].append({"user_id": uid, "error": str(r)})
+        else:
+            results["successful"].append(uid)
     
     return {
         "status": "completed",

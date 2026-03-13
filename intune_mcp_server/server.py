@@ -257,7 +257,7 @@ async def get_noncompliant_devices(top: int = 50) -> dict[str, Any]:
 async def sync_device(device_id: str) -> dict[str, Any]:
     """Trigger a sync for a managed device."""
     client = get_graph_client()
-    device = await client.get(f"/deviceManagement/managedDevices/{device_id}")
+    device = await client.get(f"/deviceManagement/managedDevices/{device_id}?$select=deviceName")
     device_name = device.get("deviceName", "Unknown")
     await client.post(f"/deviceManagement/managedDevices/{device_id}/syncDevice")
     return {"status": "success", "message": f"Sync command sent to device '{device_name}'", "device_id": device_id}
@@ -267,7 +267,7 @@ async def sync_device(device_id: str) -> dict[str, Any]:
 async def restart_device(device_id: str) -> dict[str, Any]:
     """Restart a managed device remotely."""
     client = get_graph_client()
-    device = await client.get(f"/deviceManagement/managedDevices/{device_id}")
+    device = await client.get(f"/deviceManagement/managedDevices/{device_id}?$select=deviceName")
     device_name = device.get("deviceName", "Unknown")
     await client.post(f"/deviceManagement/managedDevices/{device_id}/rebootNow")
     return {"status": "success", "message": f"Restart command sent to device '{device_name}'"}
@@ -277,7 +277,7 @@ async def restart_device(device_id: str) -> dict[str, Any]:
 async def remote_lock_device(device_id: str) -> dict[str, Any]:
     """Remotely lock a managed device."""
     client = get_graph_client()
-    device = await client.get(f"/deviceManagement/managedDevices/{device_id}")
+    device = await client.get(f"/deviceManagement/managedDevices/{device_id}?$select=deviceName")
     device_name = device.get("deviceName", "Unknown")
     await client.post(f"/deviceManagement/managedDevices/{device_id}/remoteLock")
     return {"status": "success", "message": f"Remote lock command sent to device '{device_name}'"}
@@ -289,7 +289,7 @@ async def wipe_device(device_id: str, keep_enrollment_data: bool = False, confir
     if not confirm:
         return {"status": "confirmation_required", "message": "WARNING: WIPE is destructive! Set confirm=True to proceed."}
     client = get_graph_client()
-    device = await client.get(f"/deviceManagement/managedDevices/{device_id}")
+    device = await client.get(f"/deviceManagement/managedDevices/{device_id}?$select=deviceName")
     device_name = device.get("deviceName", "Unknown")
     await client.post(f"/deviceManagement/managedDevices/{device_id}/wipe", json={"keepEnrollmentData": keep_enrollment_data, "keepUserData": False})
     return {"status": "success", "message": f"WIPE command sent to device '{device_name}'", "device_id": device_id}
@@ -301,7 +301,7 @@ async def retire_device(device_id: str, confirm: bool = False) -> dict[str, Any]
     if not confirm:
         return {"status": "confirmation_required", "message": "WARNING: RETIRE will remove company data! Set confirm=True to proceed."}
     client = get_graph_client()
-    device = await client.get(f"/deviceManagement/managedDevices/{device_id}")
+    device = await client.get(f"/deviceManagement/managedDevices/{device_id}?$select=deviceName")
     device_name = device.get("deviceName", "Unknown")
     await client.post(f"/deviceManagement/managedDevices/{device_id}/retire")
     return {"status": "success", "message": f"Retire command sent to device '{device_name}'"}
@@ -354,9 +354,11 @@ async def assign_app_to_group(app_id: str, group_id: str, intent: str = "require
         intent: Assignment intent - "required", "available", "uninstall"
     """
     client = get_graph_client()
-    app = await client.get(f"/deviceAppManagement/mobileApps/{app_id}?$select=displayName")
-    group = await client.get(f"/groups/{group_id}?$select=displayName")
-    current_assignments = await client.get(f"/deviceAppManagement/mobileApps/{app_id}/assignments")
+    app, group, current_assignments = await asyncio.gather(
+        client.get(f"/deviceAppManagement/mobileApps/{app_id}?$select=displayName"),
+        client.get(f"/groups/{group_id}?$select=displayName"),
+        client.get(f"/deviceAppManagement/mobileApps/{app_id}/assignments"),
+    )
     existing_assignments = current_assignments.get("value", [])
     new_assignment = {
         "@odata.type": "#microsoft.graph.mobileAppAssignment",
@@ -1294,12 +1296,21 @@ async def bulk_sync_devices(device_ids: list[str]) -> dict[str, Any]:
         "failed": []
     }
     
-    for device_id in device_ids:
-        try:
-            await client.post(f"/deviceManagement/managedDevices/{device_id}/syncDevice")
+    sem = asyncio.Semaphore(10)
+    async def _sync_one(did):
+        async with sem:
+            await client.post(f"/deviceManagement/managedDevices/{did}/syncDevice")
+            return did
+
+    sync_results = await asyncio.gather(
+        *[_sync_one(did) for did in device_ids],
+        return_exceptions=True,
+    )
+    for device_id, r in zip(device_ids, sync_results):
+        if isinstance(r, Exception):
+            results["failed"].append({"device_id": device_id, "error": str(r)})
+        else:
             results["successful"].append(device_id)
-        except Exception as e:
-            results["failed"].append({"device_id": device_id, "error": str(e)})
     
     return {
         "status": "completed",
