@@ -197,6 +197,96 @@ Add to your Cursor MCP configuration (`~/.cursor/mcp.json` on Windows: `%USERPRO
 }
 ```
 
+## Configuration for VS Code
+
+VS Code supports MCP servers via GitHub Copilot (agent mode) and other MCP-compatible extensions.
+
+### Option 1 — Workspace configuration (recommended)
+
+Create or edit `.vscode/mcp.json` in your workspace folder:
+
+```json
+{
+  "servers": {
+    "intune": {
+      "type": "stdio",
+      "command": "C:\\MCP\\venv\\Scripts\\python.exe",
+      "args": ["C:\\MCP\\intune_mcp_server\\server.py"],
+      "env": {
+        "TENANT_ID": "your-tenant-id",
+        "CLIENT_ID": "your-client-id",
+        "CLIENT_SECRET": "your-client-secret"
+      }
+    }
+  }
+}
+```
+
+> **Note:** The key difference from Cursor is `"servers"` (not `"mcpServers"`) and the required `"type": "stdio"` field.
+
+### Option 2 — User-level configuration
+
+To make the server available across all VS Code workspaces, add it to your user-level MCP config file:
+
+- **Windows:** `%APPDATA%\Code\User\mcp.json`
+- **macOS:** `~/Library/Application Support/Code/User/mcp.json`
+- **Linux:** `~/.config/Code/User/mcp.json`
+
+```json
+{
+  "servers": {
+    "intune": {
+      "type": "stdio",
+      "command": "C:\\MCP\\venv\\Scripts\\python.exe",
+      "args": ["C:\\MCP\\intune_mcp_server\\server.py"],
+      "env": {
+        "TENANT_ID": "your-tenant-id",
+        "CLIENT_ID": "your-client-id",
+        "CLIENT_SECRET": "your-client-secret"
+      }
+    }
+  }
+}
+```
+
+### Option 3 — VS Code settings.json
+
+Alternatively, add the server directly inside your VS Code `settings.json`:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "intune": {
+        "type": "stdio",
+        "command": "C:\\MCP\\venv\\Scripts\\python.exe",
+        "args": ["C:\\MCP\\intune_mcp_server\\server.py"],
+        "env": {
+          "TENANT_ID": "your-tenant-id",
+          "CLIENT_ID": "your-client-id",
+          "CLIENT_SECRET": "your-client-secret"
+        }
+      }
+    }
+  }
+}
+```
+
+### Enabling MCP in VS Code
+
+1. Install the **GitHub Copilot** extension (v1.156+) or another MCP-compatible extension
+2. Open the Command Palette (`Ctrl+Shift+P`) and run **"MCP: List Servers"** to verify the server is detected
+3. In GitHub Copilot Chat, switch to **Agent mode** (the sparkle icon) to use MCP tools
+
+### Configuration Comparison
+
+| Setting | Cursor | VS Code |
+|---------|--------|---------|
+| Config file | `%USERPROFILE%\.cursor\mcp.json` | `.vscode/mcp.json` or `%APPDATA%\Code\User\mcp.json` |
+| Root key | `mcpServers` | `servers` |
+| Type field | Not required | `"type": "stdio"` required |
+| Scope | Global | Workspace or user-level |
+
 ## Available Tools (134)
 
 ### Core (2 tools)
