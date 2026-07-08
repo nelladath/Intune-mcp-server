@@ -1398,5 +1398,8 @@ async def get_stale_devices_report(days_inactive: int = 30, top: int = 100) -> d
 
 
 # Entry point
-if __name__ == "__main__":
+def main():
     mcp.run()
+
+if __name__ == "__main__":
+    main()
