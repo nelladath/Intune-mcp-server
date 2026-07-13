@@ -165,7 +165,7 @@ source venv/bin/activate  # Linux/macOS
 
 3. **Install dependencies**
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt or pip install -e .
 ```
 
 4. **Configure environment variables**
