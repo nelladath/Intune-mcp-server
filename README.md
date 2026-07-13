@@ -158,9 +158,10 @@ Application.Read.All
 
 2. **Create a virtual environment**
 ```bash
-python -m venv venv
-venv\Scripts\activate  # Windows
-source venv/bin/activate  # Linux/macOS
+cd "C:\MCP" #Change the location
+py -3 -m venv venv
+.\venv\Scripts\Activate.ps1
+pip install -e .
 ```
 
 3. **Install dependencies**
