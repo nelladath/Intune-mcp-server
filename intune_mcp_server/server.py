@@ -20,6 +20,7 @@ if __name__ == "__main__":
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from intune_mcp_server.config import get_config
 from intune_mcp_server.graph_client import get_graph_client
@@ -37,8 +38,37 @@ from intune_mcp_server.tools import security
 from intune_mcp_server.tools import entra_devices
 from intune_mcp_server.tools import app_registrations
 
+def _transport_security() -> TransportSecuritySettings:
+    allowed_hosts = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+    allowed_origins = [
+        "http://127.0.0.1:*",
+        "http://localhost:*",
+        "http://[::1]:*",
+    ]
+
+    azure_hostname = os.getenv("WEBSITE_HOSTNAME")
+    if azure_hostname:
+        allowed_hosts.append(azure_hostname)
+        allowed_origins.extend(
+            [
+                f"https://{azure_hostname}",
+                f"http://{azure_hostname}",
+            ]
+        )
+
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
+    )
+
+
 # Create the MCP server instance using FastMCP
-mcp = FastMCP("intune-entra-mcp-server")
+mcp = FastMCP(
+    "intune-entra-mcp-server",
+    host="0.0.0.0",
+    transport_security=_transport_security(),
+)
 
 
 # ============== CORE TOOLS ==============
