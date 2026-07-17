@@ -67,6 +67,7 @@ def _transport_security() -> TransportSecuritySettings:
 mcp = FastMCP(
     "intune-entra-mcp-server",
     host="0.0.0.0",
+    stateless_http=True,
     transport_security=_transport_security(),
 )
 
