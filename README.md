@@ -166,9 +166,11 @@ pip install -e .
 
 3. **Install dependencies**
 ```bash
-pip install -r requirements.txt or pip install -e .
-```
+"pip install -r requirements.txt" or
+```or
+ "pip install -e ."
 
+```
 4. **Configure environment variables**
 
 Create a `.env` file or set environment variables:
