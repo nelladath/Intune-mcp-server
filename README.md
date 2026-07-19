@@ -205,7 +205,7 @@ Add to your Cursor MCP configuration (`~/.cursor/mcp.json` on Windows: `%USERPRO
 ## Configuration for VS Code
 VS Code supports MCP servers via GitHub Copilot (agent mode) and other MCP-compatible extensions.
 
-### Option 1 - User-level configuration with envFile (recommended)
+### User-level configuration with envFile (recommended)
 
 Use this to keep secrets out of `mcp.json` and centralize credentials in a local `.env` file.
 
@@ -223,54 +223,6 @@ Windows user config path:
     }
   },
   "inputs": []
-}
-```
-
-### Option 2 - Workspace configuration with inline env
-
-Create or edit `.vscode/mcp.json` in your workspace folder:
-
-```json
-{
-  "servers": {
-    "intune": {
-      "type": "stdio",
-      "command": "C:\\MCP\\venv\\Scripts\\python.exe",
-      "args": ["C:\\MCP\\intune_mcp_server\\server.py"],
-      "env": {
-        "TENANT_ID": "your-tenant-id",
-        "CLIENT_ID": "your-client-id",
-        "CLIENT_SECRET": "your-client-secret"
-      }
-    }
-  }
-}
-```
-
-### Option 3 - User-level configuration with inline env
-
-You can also put the same inline `env` configuration in `%APPDATA%\\Code\\User\\mcp.json`.
-
-### Option 4 - VS Code settings.json
-
-Alternatively, add the server directly inside your VS Code `settings.json`:
-
-```json
-{
-  "mcp": {
-    "servers": {
-      "intune": {
-        "type": "stdio",
-        "command": "C:\\MCP\\venv\\Scripts\\python.exe",
-        "args": ["C:\\MCP\\intune_mcp_server\\server.py"],
-        "env": {
-          "TENANT_ID": "your-tenant-id",
-          "CLIENT_ID": "your-client-id",
-          "CLIENT_SECRET": "your-client-secret"
-        }
-      }
-    }
-  }
 }
 ```
 
