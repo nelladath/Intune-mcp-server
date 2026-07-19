@@ -166,8 +166,10 @@ pip install -e .
 
 3. **Install dependencies**
 ```bash
-"pip install -r requirements.txt" or
-```or
+"pip install -r requirements.txt"
+```
+**OR**
+```bash
  "pip install -e ."
 
 ```
