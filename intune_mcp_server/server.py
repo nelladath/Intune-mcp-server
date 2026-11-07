@@ -24,6 +24,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from intune_mcp_server.config import get_config
 from intune_mcp_server.graph_client import get_graph_client
+from intune_mcp_server.detected_apps import get_detected_apps_for_device
 
 # Import all tool modules
 from intune_mcp_server.tools import entra_users
@@ -1256,8 +1257,7 @@ async def get_device_installed_apps(device_id: str) -> dict[str, Any]:
     device = await client.get(f"/deviceManagement/managedDevices/{device_id}?$select=deviceName")
     
     try:
-        apps = await client.get(f"/deviceManagement/managedDevices/{device_id}/detectedApps")
-        app_list = apps.get("value", [])
+        app_list = await get_detected_apps_for_device(client, device_id)
         
         return {
             "device_name": device.get("deviceName"),

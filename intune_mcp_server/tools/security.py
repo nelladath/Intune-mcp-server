@@ -5,6 +5,7 @@ Security baselines, endpoint security policies, and Defender management.
 
 from typing import Any
 from ..graph_client import get_graph_client
+from ..detected_apps import get_detected_apps_for_device
 
 
 # ============== SECURITY BASELINES ==============
@@ -558,11 +559,7 @@ async def get_detected_malware_on_device(device_id: str) -> dict[str, Any]:
             f"/deviceManagement/managedDevices/{device_id}?$select=deviceName,userPrincipalName"
         )
         
-        # Get detected apps (including malware)
-        detected = await client.get(
-            f"/deviceManagement/managedDevices/{device_id}/detectedApps"
-        )
-        detected_apps = detected.get("value", [])
+        detected_apps = await get_detected_apps_for_device(client, device_id)
         
         # Get protection state
         try:
